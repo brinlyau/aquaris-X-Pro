@@ -501,6 +501,42 @@ static int32_t msm_flash_init(
 	return 0;
 }
 
+#ifdef CONFIG_COMPAT
+static int32_t msm_flash_init_prepare(
+	struct msm_flash_ctrl_t *flash_ctrl,
+	struct msm_flash_cfg_data_t *flash_data)
+{
+	return msm_flash_init(flash_ctrl, flash_data);
+}
+#else
+static int32_t msm_flash_init_prepare(
+	struct msm_flash_ctrl_t *flash_ctrl,
+	struct msm_flash_cfg_data_t *flash_data)
+{
+	struct msm_flash_cfg_data_t flash_data_k;
+	struct msm_flash_init_info_t flash_init_info;
+	int32_t i = 0;
+
+	flash_data_k.cfg_type = flash_data->cfg_type;
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		flash_data_k.flash_current[i] =
+			flash_data->flash_current[i];
+		flash_data_k.flash_duration[i] =
+			flash_data->flash_duration[i];
+	}
+
+	flash_data_k.cfg.flash_init_info = &flash_init_info;
+	if (copy_from_user(&flash_init_info,
+			(void *)(flash_data->cfg.flash_init_info),
+			sizeof(struct msm_flash_init_info_t))) {
+			pr_err("%s copy_from_user failed %d\n",
+				__func__, __LINE__);
+			return -EFAULT;
+		}
+	return msm_flash_init(flash_ctrl, &flash_data_k);
+}
+#endif
+
 static int32_t msm_flash_low(
 	struct msm_flash_ctrl_t *flash_ctrl,
 	struct msm_flash_cfg_data_t *flash_data)
@@ -607,7 +643,7 @@ static int32_t msm_flash_config(struct msm_flash_ctrl_t *flash_ctrl,
 
 	switch (flash_data->cfg_type) {
 	case CFG_FLASH_INIT:
-		rc = msm_flash_init(flash_ctrl, flash_data);
+		rc = msm_flash_init_prepare(flash_ctrl, flash_data);
 		break;
 	case CFG_FLASH_RELEASE:
 		if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
@@ -883,6 +919,7 @@ static int32_t msm_flash_get_dt_data(struct device_node *of_node,
 	struct msm_flash_ctrl_t *fctrl)
 {
 	int32_t rc = 0;
+	int32_t flash_driver_type = -1;
 
 	CDBG("called\n");
 
@@ -901,6 +938,27 @@ static int32_t msm_flash_get_dt_data(struct device_node *of_node,
 	CDBG("subdev id %d\n", fctrl->subdev_id);
 
 	fctrl->flash_driver_type = FLASH_DRIVER_DEFAULT;
+
+	/* Read the flash_driver_type */
+	rc = of_property_read_u32(of_node, "qcom,flash-type", &flash_driver_type);
+	if (rc < 0) {
+		pr_err("failed rc %d\n", rc);
+	}
+	switch(flash_driver_type){
+		case 1:
+			fctrl->flash_driver_type = FLASH_DRIVER_PMIC;
+			break;
+		case 2:
+			fctrl->flash_driver_type = FLASH_DRIVER_GPIO;
+			break;
+		case 3:
+			fctrl->flash_driver_type = FLASH_DRIVER_GPIO;
+			break;
+		default:
+			fctrl->flash_driver_type = FLASH_DRIVER_DEFAULT;
+			break;
+	}
+	pr_info("flash_driver_type %d", fctrl->flash_driver_type);
 
 	/* Read the CCI master. Use M0 if not available in the node */
 	rc = of_property_read_u32(of_node, "qcom,cci-master",
